@@ -217,8 +217,24 @@ void _gotoSSH(Spi spi, BuildContext context) async {
           ? keyContent
           : '$keyContent\n';
       await file.writeAsString(keyContentWithNewline);
-      if (!Platform.isWindows) {
-        await Process.run('chmod', ['600', path]);
+      try {
+        await _restrictPrivateKeyFile(path);
+      } on ProcessException catch (e, s) {
+        Loggers.app.warning(
+          'Failed to restrict temporary SSH key file permissions',
+          e,
+          s,
+        );
+        if (context.mounted) {
+          context.showErrDialog(e, s, libL10n.error);
+        }
+        return;
+      } on Exception catch (e, s) {
+        Loggers.app.warning('Failed to prepare temporary SSH key file', e, s);
+        if (context.mounted) {
+          context.showErrDialog(e, s, libL10n.error);
+        }
+        return;
       }
       extraArgs.addAll(['-i', path]);
     }
@@ -276,6 +292,47 @@ void _gotoSSH(Spi spi, BuildContext context) async {
         }),
       );
     }
+  }
+}
+
+Future<void> _restrictPrivateKeyFile(String path) async {
+  if (!Platform.isWindows) {
+    final result = await Process.run('chmod', ['600', path]);
+    if (result.exitCode != 0) {
+      throw ProcessException(
+        'chmod',
+        ['600', path],
+        '${result.stdout}${result.stderr}',
+        result.exitCode,
+      );
+    }
+    return;
+  }
+
+  final whoami = await Process.run('whoami', []);
+  if (whoami.exitCode != 0) {
+    throw ProcessException(
+      'whoami',
+      const [],
+      '${whoami.stdout}${whoami.stderr}',
+      whoami.exitCode,
+    );
+  }
+
+  final user = whoami.stdout.toString().trim();
+  final icacls = await Process.run('icacls', [
+    path,
+    '/inheritance:r',
+    '/grant:r',
+    '$user:F',
+  ]);
+  if (icacls.exitCode != 0) {
+    throw ProcessException(
+      'icacls',
+      [path, '/inheritance:r', '/grant:r', '$user:F'],
+      '${icacls.stdout}${icacls.stderr}',
+      icacls.exitCode,
+    );
   }
 }
 
